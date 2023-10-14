@@ -255,7 +255,7 @@ proc_create(char *name)
 
          //init p_list_link and append it to parent->p_children
          list_link_init(&(process->p_child_link));
-         list_insert_tail(parent->p_children, &(process->p_child_link));
+         list_insert_tail(&(process->p_child_link), &(process->p_child_link));
 
          //Append two proc list
          list_insert_tail(proc_list(), &(process->p_list_link));
@@ -304,9 +304,9 @@ proc_cleanup(int status)
     //Reparenting any children to the INIT process
     if (cur_proc->p_pid != PID_INIT) {
         proc_t * child;
-        list_iterate_begin(cur_proc->p_children, child, proc_t, p_child_link) {
+        list_iterate_begin(&cur_proc->p_children, child, proc_t, p_child_link) {
             child->p_pproc = proc_initproc;
-            list_insert_tail(proc_initproc->p_children, child->p_child_link);
+            list_insert_tail(&proc_initproc->p_children, &child->p_child_link);
         } list_iterate_end();
     } else {
         panic("proc_cleanup encountered INIT process! ");//FIXME: what to do with init proc if it still has children? Does it sleep on p_wait?
@@ -314,11 +314,11 @@ proc_cleanup(int status)
     } 
 
     //Setting its status and state appropriately
-    cur_proc->status = status;
-    cur_proc->state = PROC_DEAD;
+    cur_proc->p_status = status;
+    cur_proc->p_state = PROC_DEAD;
 
     //Waking up its parent if it is waiting
-    sched_wakeup_on(cur_proc->p_pproc->p_wait);
+    sched_wakeup_on(&cur_proc->p_pproc->p_wait);
 
 }
 
@@ -407,7 +407,7 @@ do_waitpid(pid_t pid, int options, int *status)
         proc_t * child;
         //dispose of one of the exited children of the current process and return its exit status
         while (1) {
-            list_iterate_begin(cur_proc->p_children, child, proc_t, p_child_link) {
+            list_iterate_begin(&cur_proc->p_children, child, proc_t, p_child_link) {
                 if (child->p_state == PROC_DEAD) {
                     *status = child->p_status;
                     pid = child->p_pid;
@@ -416,14 +416,14 @@ do_waitpid(pid_t pid, int options, int *status)
                 }
             } list_iterate_end();
             //if all children of this process are running, blocks on its own p_wait queue until one exits
-            int cancelled = sched_cancellable_sleep_on(cur_proc->p_wait);//FIXME: should we use sched_sleep_on? -XW //sched_sleep_on(cur_proc->p_wait);
-            if (cancelled = -EINTR) {
+            int cancelled = sched_cancellable_sleep_on(&cur_proc->p_wait);//FIXME: should we use sched_sleep_on? -XW //sched_sleep_on(&cur_proc->p_wait);
+            if (cancelled == -EINTR) {
                 return -EINTR;
             }
         }
     } else if (pid > 0) { 
         proc_t * child;
-        list_iterate_begin(cur_proc->p_children, child, proc_t, p_child_link) {
+        list_iterate_begin(&cur_proc->p_children, child, proc_t, p_child_link) {
             if (child->p_pid == pid) {
                 while (1) {
                     if (child->p_state == PROC_DEAD) {
@@ -431,8 +431,8 @@ do_waitpid(pid_t pid, int options, int *status)
                         slab_obj_free(proc_allocator, child);
                         return pid;
                     }
-                    int cancelled = sched_cancellable_sleep_on(cur_proc->p_wait);//FIXME: should we use sched_sleep_on? -XW //sched_sleep_on(cur_proc->p_wait);
-                    if (cancelled = -EINTR) {
+                    int cancelled = sched_cancellable_sleep_on(&cur_proc->p_wait);//FIXME: should we use sched_sleep_on? -XW //sched_sleep_on(&cur_proc->p_wait);
+                    if (cancelled == -EINTR) {
                         return -EINTR;
                     }
                 }
