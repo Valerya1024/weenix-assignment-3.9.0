@@ -225,20 +225,37 @@ proc_create(char *name)
          //new proc init 
          proc_t *process = (proc_t*)slab_obj_alloc(proc_allocator);
          process->p_pid = (pid_t)_proc_getid();
+         dbg(DBG_PRINT, "%d\n", process->p_pid);
+
+         //set name
          if(strlen(name) > PROC_NAME_LEN - 1) {
             strncpy(process->p_comm, name, PROC_NAME_LEN);
             process->p_comm[PROC_NAME_LEN - 1] = '\0';
          }
          else strcpy(process->p_comm, name);
+
+         //init p_threads and p_children list (empty)
          list_init(&(process->p_threads));
          list_init(&(process->p_children));
+
+         //set parent = current process
          process->p_pproc = curproc;
+
+         //set status and state
          process->p_status = 0;//not sure
          process->p_state = PROC_RUNNING;
+
+         // init p_wait queue and p_pagedir
          sched_queue_init(&(process->p_wait));
          process->p_pagedir = pt_create_pagedir();
+
+         //init p_list_link and append it to _proc_list
          list_link_init(&(process->p_list_link));
+         list_insert_tail(proc_list(), &(process->p_list_link));
+
+         //init p_list_link and append it to parent->p_children
          list_link_init(&(process->p_child_link));
+         list_insert_tail(parent->p_children, &(process->p_child_link));
 
          //Append two proc list
          list_insert_tail(proc_list(), &(process->p_list_link));
@@ -277,7 +294,32 @@ proc_create(char *name)
 void
 proc_cleanup(int status)
 {
-        NOT_YET_IMPLEMENTED("PROCS: proc_cleanup");
+        //NOT_YET_IMPLEMENTED("PROCS: proc_cleanup");
+    //get current process
+    proc_t * cur_proc = curproc;
+    //Closing all open files (VFS)
+
+    //Cleaning up VM mappings (VM)
+
+    //Reparenting any children to the INIT process
+    if (cur_proc->p_pid != PID_INIT) {
+        proc_t * child;
+        list_iterate_begin(cur_proc->p_children, child, proc_t, p_child_link) {
+            child->p_pproc = proc_initproc;
+            list_insert_tail(proc_initproc->p_children, child->p_child_link);
+        } list_iterate_end();
+    } else {
+        panic("proc_cleanup encountered INIT process! ");//FIXME: what to do with init proc if it still has children? Does it sleep on p_wait?
+        //Should be deleted if INIT process is guaranteed not to have any children at this point -XW
+    } 
+
+    //Setting its status and state appropriately
+    cur_proc->status = status;
+    cur_proc->state = PROC_DEAD;
+
+    //Waking up its parent if it is waiting
+    sched_wakeup_on(cur_proc->p_pproc->p_wait);
+
 }
 
 /*
@@ -317,7 +359,21 @@ proc_kill_all()
 void
 proc_thread_exited(void *retval)
 {
-        NOT_YET_IMPLEMENTED("PROCS: proc_thread_exited");
+        //NOT_YET_IMPLEMENTED("PROCS: proc_thread_exited");
+
+    //get current process and thread
+    kthread_t * cur_thr = curthr;
+
+    //check if all (only one in this assignment) threads exited. 
+    //FIXME: Since proc_thread_exited() is only called in kthread_exit(), if kt_state is already KT_EXITED, condition is always 1. 
+    //Then there is no need to check curthr->kt_state. Please contact me if the following code needs to be deleted -XW
+    if (curthr->kt_state == KT_EXITED) {
+        //if all threads exited, the process needs to be cleaned up
+        proc_cleanup((int) retval);
+        //a new thread needs to be scheduled to run
+        sched_switch();
+    }
+
 }
 
 /* If pid is -1 dispose of one of the exited children of the current
@@ -338,8 +394,53 @@ proc_thread_exited(void *retval)
 pid_t
 do_waitpid(pid_t pid, int options, int *status)
 {
-        NOT_YET_IMPLEMENTED("PROCS: do_waitpid");
+        //NOT_YET_IMPLEMENTED("PROCS: do_waitpid");
+
+    // MTP = 0, 
+    if (options != 0) { //Options other than 0 are not supported.
         return 0;
+    }
+
+    proc_t * cur_proc = curproc;
+
+    if (pid == -1) {
+        proc_t * child;
+        //dispose of one of the exited children of the current process and return its exit status
+        while (1) {
+            list_iterate_begin(cur_proc->p_children, child, proc_t, p_child_link) {
+                if (child->p_state == PROC_DEAD) {
+                    *status = child->p_status;
+                    pid = child->p_pid;
+                    slab_obj_free(proc_allocator, child);
+                    return pid;
+                }
+            } list_iterate_end();
+            //if all children of this process are running, blocks on its own p_wait queue until one exits
+            int cancelled = sched_cancellable_sleep_on(cur_proc->p_wait);//FIXME: should we use sched_sleep_on? -XW //sched_sleep_on(cur_proc->p_wait);
+            if (cancelled = -EINTR) {
+                return -EINTR;
+            }
+        }
+    } else if (pid > 0) { 
+        proc_t * child;
+        list_iterate_begin(cur_proc->p_children, child, proc_t, p_child_link) {
+            if (child->p_pid == pid) {
+                while (1) {
+                    if (child->p_state == PROC_DEAD) {
+                        *status = child->p_status;
+                        slab_obj_free(proc_allocator, child);
+                        return pid;
+                    }
+                    int cancelled = sched_cancellable_sleep_on(cur_proc->p_wait);//FIXME: should we use sched_sleep_on? -XW //sched_sleep_on(cur_proc->p_wait);
+                    if (cancelled = -EINTR) {
+                        return -EINTR;
+                    }
+                }
+            }
+        } list_iterate_end();
+    } 
+    //Pids other than -1 and positive numbers are not supported.
+    return 0;
 }
 
 /*
@@ -351,5 +452,6 @@ do_waitpid(pid_t pid, int options, int *status)
 void
 do_exit(int status)
 {
-        NOT_YET_IMPLEMENTED("PROCS: do_exit");
+        //NOT_YET_IMPLEMENTED("PROCS: do_exit");
+    
 }
